@@ -7,6 +7,6 @@ the app puts your video job on a temporary branch, starts the **render** workflo
 - Your video is kept as a workflow artifact for **one day** and is removed as soon as the app has downloaded it.
 - The job branch (job-...) is deleted after the download.
 - The workflow only runs when you start a render in the app. There is no schedule.
-- The app limits you to a few renders a day so your free GitHub Actions minutes are not used up.
+- The app limits you to ten renders a day, at most 12 pieces drawn at once, and waits between renders, so the account is never loaded heavily.
 
 You can delete this repo at any time. The app makes a new one the next time you use **Render on GitHub**.
