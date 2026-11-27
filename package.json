@@ -1,0 +1,9 @@
+{
+  "name": "animato-render",
+  "private": true,
+  "type": "module",
+  "description": "Builds videos made in Animato Stickman Studio",
+  "dependencies": {
+    "playwright-core": "1.49.1"
+  }
+}

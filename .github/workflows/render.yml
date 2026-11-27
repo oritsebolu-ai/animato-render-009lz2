@@ -1,0 +1,120 @@
+# animato-render-pipeline v3
+# Made by Animato Stickman Studio. Builds the video for one job (a branch called job-<id>) and saves the encrypted video as an artifact
+# that is kept for one day. Nothing here runs unless the app starts it for a real job: there is no schedule and no retry.
+name: render
+run-name: render ${{ inputs.job }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job id made by the app
+        required: true
+      key:
+        description: Key that unlocks this job (made by the app)
+        required: true
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: render
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      parts: ${{ steps.plan.outputs.parts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: job-${{ inputs.job }}
+          path: jobdata
+      - name: Check the limits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          N=$(gh api "repos/${{ github.repository }}/actions/workflows/render.yml/runs?created=%3E%3D$SINCE&per_page=100" --jq '.total_count')
+          echo "runs in the last 24 hours: $N"
+          if [ "$N" -gt 3 ]; then echo "Daily limit reached"; exit 1; fi
+          SINCE5=$(date -u -d '4 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          M=$(gh api "repos/${{ github.repository }}/actions/workflows/render.yml/runs?created=%3E%3D$SINCE5&per_page=100" --jq '.total_count')
+          if [ "$M" -gt 1 ]; then echo "Please wait a few minutes between renders"; exit 1; fi
+      - id: plan
+        run: node tools/plan.mjs jobdata/job/meta.json
+
+  render:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      max-parallel: 10
+      matrix:
+        part: ${{ fromJson(needs.plan.outputs.parts) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: job-${{ inputs.job }}
+          path: jobdata
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          npm install --no-audit --no-fund --loglevel=error
+      - name: Draw part ${{ matrix.part }}
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+          KEY: ${{ inputs.key }}
+        run: node tools/render.mjs jobdata/job out ${{ matrix.part }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-${{ matrix.part }}-${{ inputs.job }}
+          path: out/part-${{ matrix.part }}.enc
+          retention-days: 1
+          compression-level: 0
+
+  join:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: job-${{ inputs.job }}
+          path: jobdata
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*-${{ inputs.job }}
+          path: parts
+          merge-multiple: true
+      - name: Join and add the voiceover
+        env:
+          KEY: ${{ inputs.key }}
+        run: node tools/join.mjs jobdata/job parts final
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ inputs.job }}
+          path: final/video.enc
+          retention-days: 1
+          compression-level: 0
+      - name: Remove the part files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq '.artifacts[] | select(.name | startswith("part-")) | .id'); do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" || true
+          done
